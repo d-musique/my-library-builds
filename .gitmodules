@@ -1,0 +1,3 @@
+[submodule "lipomerge"]
+	path = lipomerge
+	url = https://github.com/faaxm/lipomerge.git

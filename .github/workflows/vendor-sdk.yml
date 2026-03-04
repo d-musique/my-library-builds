@@ -1,0 +1,146 @@
+name: Build Vendored SDK
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  VCPKG_COMMIT_ID: d59510da59a2ee8b943509998b63da7b472d93cf
+  VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
+
+jobs:
+  build:
+    name: Build ${{ matrix.package }} for ${{ matrix.triplet }}
+    runs-on: ${{ contains(matrix.triplet, 'windows') && 'windows-latest' || 'macos-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [gettext-libintl, libiconv, sdl3]
+        triplet: [x86-windows-hybrid, x64-windows-hybrid, arm64-windows-hybrid, universal-osx]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Bootstrap vcpkg
+        shell: bash
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git vcpkg
+          cd vcpkg && git checkout ${{ env.VCPKG_COMMIT_ID }}
+          [[ "$RUNNER_OS" == "Windows" ]] && ./bootstrap-vcpkg.bat || ./bootstrap-vcpkg.sh
+          mkdir -p ../vcpkg_cache
+
+      - name: vcpkg Binary Caching
+        uses: actions/cache@v4
+        with:
+          path: vcpkg_cache
+          key: vcpkg-${{ runner.os }}-${{ env.VCPKG_COMMIT_ID }}-${{ matrix.package }}-${{ matrix.triplet }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ env.VCPKG_COMMIT_ID }}-${{ matrix.package }}-
+
+      - name: Setup Custom Triplets
+        shell: bash
+        run: |
+          mkdir -p vcpkg/triplets/community
+          # Windows: x86, x64, and ARM64 with Static CRT + Dynamic DLL
+          for ARCH in x86 x64 arm64; do
+            cat <<EOF > vcpkg/triplets/community/$ARCH-windows-hybrid.cmake
+          set(VCPKG_TARGET_ARCHITECTURE $ARCH)
+          set(VCPKG_CRT_LINKAGE static)
+          set(VCPKG_LIBRARY_LINKAGE dynamic)
+          EOF
+          done
+          # macOS: Dylibs + RPATH for x64 and arm64 slices
+          for ARCH in x64 arm64; do
+            ARCH_NAME=$([[ "$ARCH" == "x64" ]] && echo "x86_64" || echo "arm64")
+            cat <<EOF > vcpkg/triplets/community/$ARCH-osx-dynamic.cmake
+          set(VCPKG_TARGET_ARCHITECTURE $ARCH)
+          set(VCPKG_CMAKE_SYSTEM_NAME Darwin)
+          set(VCPKG_CRT_LINKAGE dynamic)
+          set(VCPKG_LIBRARY_LINKAGE dynamic)
+          set(VCPKG_MACOSX_RPATH ON)
+          set(VCPKG_CMAKE_CONFIGURE_OPTIONS "-DCMAKE_OSX_ARCHITECTURES=$ARCH_NAME")
+          EOF
+          done
+
+      - name: Build and Merge
+        shell: bash
+        run: |
+          PKG="${{ matrix.package }}"
+          TRIPLET="${{ matrix.triplet }}"
+          rm -rf staging && mkdir -p staging
+
+          if [[ "$TRIPLET" == "universal-osx" ]]; then
+            ./vcpkg/vcpkg install $PKG:x64-osx-dynamic --overlay-triplets=vcpkg/triplets/community
+            ./vcpkg/vcpkg install $PKG:arm64-osx-dynamic --overlay-triplets=vcpkg/triplets/community
+            X64_DIR="vcpkg/packages/${PKG}_x64-osx-dynamic"
+            ARM_DIR="vcpkg/packages/${PKG}_arm64-osx-dynamic"
+            VER=$(grep '^Version: ' "$ARM_DIR/CONTROL" | cut -d ' ' -f 2)
+            PORT_VER=$(grep '^Port-Version: ' "$ARM_DIR/CONTROL" | cut -d ' ' -f 2 || echo "0")
+            FULL_NAME="${PKG}-${VER}-${PORT_VER}-universal-osx"
+            python3 lipomerge/lipomerge.py "$X64_DIR" "$ARM_DIR" "staging/${FULL_NAME}"
+          else
+            ./vcpkg/vcpkg install $PKG:$TRIPLET --overlay-triplets=vcpkg/triplets/community
+            PKG_DIR="vcpkg/packages/${PKG}_${TRIPLET}"
+            VER=$(grep '^Version: ' "$PKG_DIR/CONTROL" | cut -d ' ' -f 2)
+            PORT_VER=$(grep '^Port-Version: ' "$PKG_DIR/CONTROL" | cut -d ' ' -f 2 || echo "0")
+            FULL_NAME="${PKG}-${VER}-${PORT_VER}-${TRIPLET}"
+            mkdir -p "staging/${FULL_NAME}"
+            cp -R "$PKG_DIR"/* "staging/${FULL_NAME}/"
+          fi
+
+          # Custom Packing: preserved symlinks for macOS, clean root for Windows
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            7z a "${FULL_NAME}.zip" "./staging/${FULL_NAME}"
+          else
+            cd staging && zip -ry "../${FULL_NAME}.zip" "${FULL_NAME}" && cd ..
+          fi
+
+          echo "ARTIFACT_NAME=${FULL_NAME}" >> $GITHUB_ENV
+
+      - name: Upload Finished Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_NAME }}.zip
+          # Critical: Prevents v7 from re-zipping your zip
+          archive: false
+
+  publish:
+    name: Create GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ./release-assets
+          merge-multiple: true
+          skip-decompress: true
+
+      - name: Generate Checksums
+        working-directory: ./release-assets
+        shell: bash
+        run: |
+          # Ensure we are only checksumming files and not accidental directories
+          # The -b flag ensures we treat them as binary files
+          sha256sum -b *.zip > SHA256SUMS.txt
+
+          echo "--- Verification: Checksum file content ---"
+          cat SHA256SUMS.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/*.zip
+            release-assets/SHA256SUMS.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: false
