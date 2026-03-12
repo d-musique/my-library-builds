@@ -7,7 +7,7 @@ on:
       - 'v*'
 
 env:
-  VCPKG_COMMIT_ID: d59510da59a2ee8b943509998b63da7b472d93cf
+  VCPKG_COMMIT_ID: dd306f32e07d87fdb16837af64f33b6b415c770a
   VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
 
 jobs:
@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [gettext-libintl, libiconv, sdl3]
+        package: [gettext-libintl, libiconv, sdl3, sqlite3]
         triplet: [x86-windows-hybrid, x64-windows-hybrid, arm64-windows-hybrid, universal-osx]
 
     steps:
