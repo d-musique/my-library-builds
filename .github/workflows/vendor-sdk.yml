@@ -21,7 +21,7 @@ jobs:
         triplet: [x86-windows-hybrid, x64-windows-hybrid, arm64-windows-hybrid, universal-osx]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -34,7 +34,7 @@ jobs:
           mkdir -p ../vcpkg_cache
 
       - name: vcpkg Binary Caching
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: vcpkg_cache
           key: vcpkg-${{ runner.os }}-${{ env.VCPKG_COMMIT_ID }}-${{ matrix.package }}-${{ matrix.triplet }}
