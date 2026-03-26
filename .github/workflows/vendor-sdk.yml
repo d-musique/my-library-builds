@@ -7,7 +7,7 @@ on:
       - 'v*'
 
 env:
-  VCPKG_COMMIT_ID: dd306f32e07d87fdb16837af64f33b6b415c770a
+  VCPKG_COMMIT_ID: 489ec93b13cf7d1dc4f0b5e69ad636ec927217e3
   VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
 
 jobs:
@@ -17,13 +17,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [gettext-libintl, libiconv, sdl3, sqlite3]
+        package: [gettext-libintl, libiconv, sdl3, sqlite3, jemalloc]
         triplet: [x86-windows-hybrid, x64-windows-hybrid, arm64-windows-hybrid, universal-osx]
 
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install autoconf autoconf-archive automake libtool
+          fi
 
       - name: Bootstrap vcpkg
         shell: bash
@@ -41,31 +48,6 @@ jobs:
           restore-keys: |
             vcpkg-${{ runner.os }}-${{ env.VCPKG_COMMIT_ID }}-${{ matrix.package }}-
 
-      - name: Setup Custom Triplets
-        shell: bash
-        run: |
-          mkdir -p vcpkg/triplets/community
-          # Windows: x86, x64, and ARM64 with Static CRT + Dynamic DLL
-          for ARCH in x86 x64 arm64; do
-            cat <<EOF > vcpkg/triplets/community/$ARCH-windows-hybrid.cmake
-          set(VCPKG_TARGET_ARCHITECTURE $ARCH)
-          set(VCPKG_CRT_LINKAGE static)
-          set(VCPKG_LIBRARY_LINKAGE dynamic)
-          EOF
-          done
-          # macOS: Dylibs + RPATH for x64 and arm64 slices
-          for ARCH in x64 arm64; do
-            ARCH_NAME=$([[ "$ARCH" == "x64" ]] && echo "x86_64" || echo "arm64")
-            cat <<EOF > vcpkg/triplets/community/$ARCH-osx-dynamic.cmake
-          set(VCPKG_TARGET_ARCHITECTURE $ARCH)
-          set(VCPKG_CMAKE_SYSTEM_NAME Darwin)
-          set(VCPKG_CRT_LINKAGE dynamic)
-          set(VCPKG_LIBRARY_LINKAGE dynamic)
-          set(VCPKG_MACOSX_RPATH ON)
-          set(VCPKG_CMAKE_CONFIGURE_OPTIONS "-DCMAKE_OSX_ARCHITECTURES=$ARCH_NAME")
-          EOF
-          done
-
       - name: Build and Merge
         shell: bash
         run: |
@@ -74,8 +56,8 @@ jobs:
           rm -rf staging && mkdir -p staging
 
           if [[ "$TRIPLET" == "universal-osx" ]]; then
-            ./vcpkg/vcpkg install $PKG:x64-osx-dynamic --overlay-triplets=vcpkg/triplets/community
-            ./vcpkg/vcpkg install $PKG:arm64-osx-dynamic --overlay-triplets=vcpkg/triplets/community
+            ./vcpkg/vcpkg install $PKG:x64-osx-dynamic --overlay-triplets=triplets --overlay-ports=ports
+            ./vcpkg/vcpkg install $PKG:arm64-osx-dynamic --overlay-triplets=triplets --overlay-ports=ports
             X64_DIR="vcpkg/packages/${PKG}_x64-osx-dynamic"
             ARM_DIR="vcpkg/packages/${PKG}_arm64-osx-dynamic"
             VER=$(grep '^Version: ' "$ARM_DIR/CONTROL" | cut -d ' ' -f 2)
@@ -83,7 +65,7 @@ jobs:
             FULL_NAME="${PKG}-${VER}-${PORT_VER}-universal-osx"
             python3 lipomerge/lipomerge.py "$X64_DIR" "$ARM_DIR" "staging/${FULL_NAME}"
           else
-            ./vcpkg/vcpkg install $PKG:$TRIPLET --overlay-triplets=vcpkg/triplets/community
+            ./vcpkg/vcpkg install $PKG:$TRIPLET --overlay-triplets=triplets --overlay-ports=ports
             PKG_DIR="vcpkg/packages/${PKG}_${TRIPLET}"
             VER=$(grep '^Version: ' "$PKG_DIR/CONTROL" | cut -d ' ' -f 2)
             PORT_VER=$(grep '^Port-Version: ' "$PKG_DIR/CONTROL" | cut -d ' ' -f 2 || echo "0")
