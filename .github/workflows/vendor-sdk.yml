@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [gettext-libintl, libiconv, sdl3, sqlite3, jemalloc]
+        package: [gettext-libintl, libiconv, sdl3, sqlite3, jemalloc, fluidsynth]
         triplet: [x86-windows-hybrid, x64-windows-hybrid, arm64-windows-hybrid, universal-osx]
 
     steps:
