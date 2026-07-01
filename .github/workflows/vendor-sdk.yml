@@ -7,7 +7,7 @@ on:
       - 'v*'
 
 env:
-  VCPKG_COMMIT_ID: 489ec93b13cf7d1dc4f0b5e69ad636ec927217e3
+  VCPKG_COMMIT_ID: 1f5e0348089e8a9b187f57d42866ebc871e815da
   VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
 
 jobs:
